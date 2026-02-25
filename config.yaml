@@ -13,11 +13,11 @@ contracts:
       - event: "Transfer(address indexed from, address indexed to, uint256 value)"
 
 chains:
-  - id: 130 # Unichain
-    start_block: 0
-    contracts:
-      - name: ERC20
-        address: 0x078D782b760474a361dDA0AF3839290b0EF57AD6
+  # - id: 130 # Unichain
+  #   start_block: 0
+  #   contracts:
+  #     - name: ERC20
+  #       address: 0x078D782b760474a361dDA0AF3839290b0EF57AD6
   - id: 42161 # Arbitrum
     start_block: 0
     contracts:
