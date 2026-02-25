@@ -1,0 +1,82 @@
+enum TransferType {
+  TRANSFER
+  MINT
+  BURN
+}
+
+type Transfer @index(fields: ["chainId", ["blockTimestamp", "DESC"]]) {
+  id: ID!                    # ${chainId}_${blockNumber}_${logIndex}
+  chainId: Int!
+  blockNumber: Int!
+  blockTimestamp: Int!
+  logIndex: Int!
+  txHash: String! @index
+  from: String! @index
+  to: String! @index
+  value: BigInt!
+  transferType: TransferType!
+}
+
+type Account {
+  id: ID!                    # ${chainId}-${address}
+  chainId: Int! @index
+  address: String! @index
+  balance: BigInt!
+  transfersIn: Int!
+  transfersOut: Int!
+  firstSeenBlock: Int!
+  firstSeenTimestamp: Int!
+  lastActiveBlock: Int!
+  lastActiveTimestamp: Int!
+  approvalsGiven: [Approval!]! @derivedFrom(field: "owner")
+  approvalsReceived: [Approval!]! @derivedFrom(field: "spender")
+}
+
+type Approval {
+  id: ID!                    # ${chainId}-${owner}-${spender}
+  chainId: Int! @index
+  amount: BigInt!
+  owner: Account!
+  spender: Account!
+  lastUpdatedBlock: Int!
+  lastUpdatedTimestamp: Int!
+}
+
+type ChainSupply {
+  id: ID!                    # ${chainId}-supply
+  chainId: Int!
+  totalSupply: BigInt!
+  totalMinted: BigInt!
+  totalBurned: BigInt!
+  mintCount: Int!
+  burnCount: Int!
+  transferCount: Int!
+  lastUpdatedBlock: Int!
+  lastUpdatedTimestamp: Int!
+}
+
+type DailySnapshot @index(fields: ["chainId", ["dayId", "DESC"]]) {
+  id: ID!                    # ${chainId}-${dayId}
+  chainId: Int!
+  dayId: Int!
+  dayStartTimestamp: Int!
+  dailyVolume: BigInt!
+  dailyTransferCount: Int!
+  dailyMintVolume: BigInt!
+  dailyBurnVolume: BigInt!
+  dailyMintCount: Int!
+  dailyBurnCount: Int!
+  endOfDaySupply: BigInt!
+  firstBlockOfDay: Int!
+  lastBlockOfDay: Int!
+}
+
+type AccountDailyActivity {
+  id: ID!                    # ${chainId}-${address}-${dayId}
+  chainId: Int! @index
+  account: String! @index
+  dayId: Int! @index
+  transferCount: Int!
+  volumeIn: BigInt!
+  volumeOut: BigInt!
+}
