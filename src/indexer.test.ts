@@ -296,35 +296,3 @@ describe("Unit: Transfer handler", () => {
   });
 });
 
-describe("Unit: Approval handler", () => {
-  it("Creates approval and ensures both accounts exist", async () => {
-    const mockDb = MockDb.createMockDb();
-    const owner = Addresses.mockAddresses[0]!;
-    const spender = Addresses.mockAddresses[1]!;
-
-    const mockApproval = ERC20.Approval.createMockEvent({
-      owner,
-      spender,
-      value: 1000000n,
-      mockEventData: { srcAddress: USDC_ADDRESS, chainId: MOCK_CHAIN_ID },
-    });
-
-    const result = await ERC20.Approval.processEvent({
-      event: mockApproval,
-      mockDb,
-    });
-
-    const approvalId = `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${owner}-${spender}`;
-    const approval = result.entities.Approval.get(approvalId);
-    expect(approval).toBeDefined();
-    expect(approval?.amount).toBe(1000000n);
-    expect(approval?.token).toBe(USDC_ADDRESS);
-
-    expect(
-      result.entities.Account.get(`${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${owner}`)
-    ).toBeDefined();
-    expect(
-      result.entities.Account.get(`${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${spender}`)
-    ).toBeDefined();
-  });
-});

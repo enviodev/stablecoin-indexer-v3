@@ -7,21 +7,21 @@ enum TransferType {
 type Transfer @index(fields: ["token", ["blockTimestamp", "DESC"]]) {
   id: ID!                    # ${chainId}_${token}_${blockNumber}_${logIndex}
   chainId: Int!
-  token: String! @index
+  token: String!
   blockNumber: Int!
   blockTimestamp: Int!
   logIndex: Int!
   txHash: String! @index
-  from: String! @index
-  to: String! @index
+  from: String!
+  to: String!
   value: BigInt!
   transferType: TransferType!
 }
 
 type Account @index(fields: ["token", ["balance", "DESC"]]) {
   id: ID!                    # ${chainId}-${token}-${address}
-  chainId: Int! @index
-  token: String! @index
+  chainId: Int!
+  token: String!
   address: String! @index
   balance: BigInt!
   totalVolumeIn: BigInt!
@@ -32,25 +32,12 @@ type Account @index(fields: ["token", ["balance", "DESC"]]) {
   firstSeenTimestamp: Int!
   lastActiveBlock: Int!
   lastActiveTimestamp: Int!
-  approvalsGiven: [Approval!]! @derivedFrom(field: "owner")
-  approvalsReceived: [Approval!]! @derivedFrom(field: "spender")
-}
-
-type Approval @index(fields: ["token", "chainId"]) {
-  id: ID!                    # ${chainId}-${token}-${owner}-${spender}
-  chainId: Int! @index
-  token: String! @index
-  amount: BigInt!
-  owner: Account!
-  spender: Account!
-  lastUpdatedBlock: Int!
-  lastUpdatedTimestamp: Int!
 }
 
 type TokenSupply @index(fields: ["chainId", "token"]) {
   id: ID!                    # ${chainId}-${token}-supply
   chainId: Int!
-  token: String! @index
+  token: String!
   totalSupply: BigInt!
   totalMinted: BigInt!
   totalBurned: BigInt!
@@ -65,9 +52,9 @@ type TokenSupply @index(fields: ["chainId", "token"]) {
 
 type HourlySnapshot @index(fields: ["token", ["hourId", "DESC"]]) {
   id: ID!                    # ${chainId}-${token}-${hourId}
-  chainId: Int! @index
-  token: String! @index
-  hourId: Int! @index
+  chainId: Int!
+  token: String!
+  hourId: Int!
   hourStartTimestamp: Int!
   volume: BigInt!
   transferCount: Int!
@@ -83,9 +70,9 @@ type HourlySnapshot @index(fields: ["token", ["hourId", "DESC"]]) {
 
 type DailySnapshot @index(fields: ["token", ["dayId", "DESC"]]) {
   id: ID!                    # ${chainId}-${token}-${dayId}
-  chainId: Int! @index
-  token: String! @index
-  dayId: Int! @index
+  chainId: Int!
+  token: String!
+  dayId: Int!
   dayStartTimestamp: Int!
   dailyVolume: BigInt!
   dailyTransferCount: Int!
@@ -104,9 +91,9 @@ type DailySnapshot @index(fields: ["token", ["dayId", "DESC"]]) {
 
 type WeeklySnapshot @index(fields: ["token", ["weekId", "DESC"]]) {
   id: ID!                    # ${chainId}-${token}-${weekId}
-  chainId: Int! @index
-  token: String! @index
-  weekId: Int! @index
+  chainId: Int!
+  token: String!
+  weekId: Int!
   weekStartTimestamp: Int!
   weeklyVolume: BigInt!
   weeklyTransferCount: Int!
@@ -124,8 +111,8 @@ type WeeklySnapshot @index(fields: ["token", ["weekId", "DESC"]]) {
 
 type CrossTokenDailySnapshot @index(fields: ["chainId", ["dayId", "DESC"]]) {
   id: ID!                    # ${chainId}-${dayId}
-  chainId: Int! @index
-  dayId: Int! @index
+  chainId: Int!
+  dayId: Int!
   dayStartTimestamp: Int!
   totalVolume: BigInt!
   totalTransferCount: Int!
@@ -137,10 +124,10 @@ type CrossTokenDailySnapshot @index(fields: ["chainId", ["dayId", "DESC"]]) {
 type AccountBalanceSnapshot @index(fields: ["account", "token", ["blockTimestamp", "DESC"]]) {
   id: ID!                    # ${chainId}-${token}-${address}-${blockNumber}-${logIndex}
   chainId: Int!
-  token: String! @index
-  account: String! @index
+  token: String!
+  account: String!
   blockNumber: Int!
-  blockTimestamp: Int! @index
+  blockTimestamp: Int!
   balance: BigInt!
   balanceChange: BigInt!
   txHash: String!
@@ -148,10 +135,10 @@ type AccountBalanceSnapshot @index(fields: ["account", "token", ["blockTimestamp
 
 type AccountDailyActivity @index(fields: ["account", "token", ["dayId", "DESC"]]) {
   id: ID!                    # ${chainId}-${token}-${address}-${dayId}
-  chainId: Int! @index
-  token: String! @index
-  account: String! @index
-  dayId: Int! @index
+  chainId: Int!
+  token: String!
+  account: String!
+  dayId: Int!
   transferCount: Int!
   volumeIn: BigInt!
   volumeOut: BigInt!
