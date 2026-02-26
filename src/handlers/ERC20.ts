@@ -1,14 +1,4 @@
-import {
-  ERC20,
-  type Account,
-  type Approval,
-  type Transfer,
-  type TokenSupply,
-  type HourlySnapshot,
-  type DailySnapshot,
-  type WeeklySnapshot,
-  type AccountDailyActivity,
-} from "generated";
+import { ERC20 } from "generated";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const HOUR = 3600;
@@ -17,6 +7,20 @@ const WEEK = 604800;
 
 function getAccountId(chainId: number, token: string, address: string): string {
   return `${chainId}-${token}-${address}`;
+}
+
+/**
+ * Track a unique address for a time period. Returns true if this is
+ * the first time the address appeared in this period (new unique).
+ */
+async function trackUnique(
+  entity: { get: (id: string) => Promise<{ id: string } | undefined>; set: (v: { id: string }) => void },
+  id: string,
+): Promise<boolean> {
+  const existing = await entity.get(id);
+  if (existing) return false;
+  entity.set({ id });
+  return true;
 }
 
 ERC20.Transfer.handler(async ({ event, context }) => {
@@ -47,14 +51,26 @@ ERC20.Transfer.handler(async ({ event, context }) => {
     transferType,
   });
 
+  // --- Track holder count changes and new addresses ---
+  let holderDelta = 0;
+  let newAddresses = 0;
+
   // 2. Update sender Account (skip for mints)
   if (!isMint) {
     const senderId = getAccountId(chainId, token, from);
     const sender = await context.Account.get(senderId);
+    const oldBalance = sender?.balance ?? 0n;
+    const newBalance = oldBalance - value;
+
+    if (!sender) newAddresses++;
+    if (oldBalance !== 0n && newBalance === 0n) holderDelta--;
+    if (oldBalance === 0n && newBalance !== 0n) holderDelta++;
+
     if (sender) {
       context.Account.set({
         ...sender,
-        balance: sender.balance - value,
+        balance: newBalance,
+        totalVolumeOut: sender.totalVolumeOut + value,
         transfersOut: sender.transfersOut + 1,
         lastActiveBlock: blockNumber,
         lastActiveTimestamp: ts,
@@ -65,7 +81,9 @@ ERC20.Transfer.handler(async ({ event, context }) => {
         chainId,
         token,
         address: from,
-        balance: 0n - value,
+        balance: newBalance,
+        totalVolumeIn: 0n,
+        totalVolumeOut: value,
         transfersIn: 0,
         transfersOut: 1,
         firstSeenBlock: blockNumber,
@@ -74,16 +92,37 @@ ERC20.Transfer.handler(async ({ event, context }) => {
         lastActiveTimestamp: ts,
       });
     }
+
+    // Balance snapshot for sender
+    context.AccountBalanceSnapshot.set({
+      id: `${chainId}-${token}-${from}-${blockNumber}-${event.logIndex}`,
+      chainId,
+      token,
+      account: from,
+      blockNumber,
+      blockTimestamp: ts,
+      balance: newBalance,
+      balanceChange: 0n - value,
+      txHash: event.transaction.hash,
+    });
   }
 
   // 3. Update receiver Account (skip for burns)
   if (!isBurn) {
     const receiverId = getAccountId(chainId, token, to);
     const receiver = await context.Account.get(receiverId);
+    const oldBalance = receiver?.balance ?? 0n;
+    const newBalance = oldBalance + value;
+
+    if (!receiver) newAddresses++;
+    if (oldBalance !== 0n && newBalance === 0n) holderDelta--;
+    if (oldBalance === 0n && newBalance !== 0n) holderDelta++;
+
     if (receiver) {
       context.Account.set({
         ...receiver,
-        balance: receiver.balance + value,
+        balance: newBalance,
+        totalVolumeIn: receiver.totalVolumeIn + value,
         transfersIn: receiver.transfersIn + 1,
         lastActiveBlock: blockNumber,
         lastActiveTimestamp: ts,
@@ -94,7 +133,9 @@ ERC20.Transfer.handler(async ({ event, context }) => {
         chainId,
         token,
         address: to,
-        balance: value,
+        balance: newBalance,
+        totalVolumeIn: value,
+        totalVolumeOut: 0n,
         transfersIn: 1,
         transfersOut: 0,
         firstSeenBlock: blockNumber,
@@ -103,17 +144,35 @@ ERC20.Transfer.handler(async ({ event, context }) => {
         lastActiveTimestamp: ts,
       });
     }
+
+    // Balance snapshot for receiver
+    context.AccountBalanceSnapshot.set({
+      id: `${chainId}-${token}-${to}-${blockNumber}-${event.logIndex}`,
+      chainId,
+      token,
+      account: to,
+      blockNumber,
+      blockTimestamp: ts,
+      balance: newBalance,
+      balanceChange: value,
+      txHash: event.transaction.hash,
+    });
   }
 
   // 4. Update TokenSupply
   const supplyId = `${chainId}-${token}-supply`;
   const supply = await context.TokenSupply.get(supplyId);
+  const mintVal = isMint ? value : 0n;
+  const burnVal = isBurn ? value : 0n;
+
   if (supply) {
     context.TokenSupply.set({
       ...supply,
-      totalSupply: supply.totalSupply + (isMint ? value : 0n) - (isBurn ? value : 0n),
-      totalMinted: supply.totalMinted + (isMint ? value : 0n),
-      totalBurned: supply.totalBurned + (isBurn ? value : 0n),
+      totalSupply: supply.totalSupply + mintVal - burnVal,
+      totalMinted: supply.totalMinted + mintVal,
+      totalBurned: supply.totalBurned + burnVal,
+      allTimeVolume: supply.allTimeVolume + value,
+      holderCount: supply.holderCount + holderDelta,
       mintCount: supply.mintCount + (isMint ? 1 : 0),
       burnCount: supply.burnCount + (isBurn ? 1 : 0),
       transferCount: supply.transferCount + 1,
@@ -125,9 +184,11 @@ ERC20.Transfer.handler(async ({ event, context }) => {
       id: supplyId,
       chainId,
       token,
-      totalSupply: isMint ? value : isBurn ? 0n - value : 0n,
-      totalMinted: isMint ? value : 0n,
-      totalBurned: isBurn ? value : 0n,
+      totalSupply: mintVal - burnVal,
+      totalMinted: mintVal,
+      totalBurned: burnVal,
+      allTimeVolume: value,
+      holderCount: holderDelta,
       mintCount: isMint ? 1 : 0,
       burnCount: isBurn ? 1 : 0,
       transferCount: 1,
@@ -138,12 +199,32 @@ ERC20.Transfer.handler(async ({ event, context }) => {
 
   const currentSupply = await context.TokenSupply.get(supplyId);
   const currentTotalSupply = currentSupply?.totalSupply ?? 0n;
+  const netFlow = mintVal - burnVal;
 
-  const mintVal = isMint ? value : 0n;
-  const burnVal = isBurn ? value : 0n;
+  // --- Unique address tracking per period ---
+  const hourId = Math.floor(ts / HOUR);
+  const dayId = Math.floor(ts / DAY);
+  const weekId = Math.floor(ts / WEEK);
+
+  let hourlyUniques = 0;
+  let dailyUniques = 0;
+  let weeklyUniques = 0;
+
+  // Track each non-zero address involved
+  const addresses: string[] = [];
+  if (!isMint) addresses.push(from);
+  if (!isBurn) addresses.push(to);
+
+  for (const addr of addresses) {
+    if (await trackUnique(context.HourlyActiveAddress, `${chainId}-${token}-${hourId}-${addr}`))
+      hourlyUniques++;
+    if (await trackUnique(context.DailyActiveAddress, `${chainId}-${token}-${dayId}-${addr}`))
+      dailyUniques++;
+    if (await trackUnique(context.WeeklyActiveAddress, `${chainId}-${token}-${weekId}-${addr}`))
+      weeklyUniques++;
+  }
 
   // 5. HourlySnapshot
-  const hourId = Math.floor(ts / HOUR);
   const hourlyId = `${chainId}-${token}-${hourId}`;
   const hourly = await context.HourlySnapshot.get(hourlyId);
   if (hourly) {
@@ -153,8 +234,10 @@ ERC20.Transfer.handler(async ({ event, context }) => {
       transferCount: hourly.transferCount + 1,
       mintVolume: hourly.mintVolume + mintVal,
       burnVolume: hourly.burnVolume + burnVal,
+      netMintBurnFlow: hourly.netMintBurnFlow + netFlow,
       mintCount: hourly.mintCount + (isMint ? 1 : 0),
       burnCount: hourly.burnCount + (isBurn ? 1 : 0),
+      uniqueActiveAddresses: hourly.uniqueActiveAddresses + hourlyUniques,
       endOfHourSupply: currentTotalSupply,
       lastBlockOfHour: blockNumber,
     });
@@ -169,8 +252,10 @@ ERC20.Transfer.handler(async ({ event, context }) => {
       transferCount: 1,
       mintVolume: mintVal,
       burnVolume: burnVal,
+      netMintBurnFlow: netFlow,
       mintCount: isMint ? 1 : 0,
       burnCount: isBurn ? 1 : 0,
+      uniqueActiveAddresses: hourlyUniques,
       endOfHourSupply: currentTotalSupply,
       firstBlockOfHour: blockNumber,
       lastBlockOfHour: blockNumber,
@@ -178,7 +263,6 @@ ERC20.Transfer.handler(async ({ event, context }) => {
   }
 
   // 6. DailySnapshot
-  const dayId = Math.floor(ts / DAY);
   const dailyId = `${chainId}-${token}-${dayId}`;
   const daily = await context.DailySnapshot.get(dailyId);
   if (daily) {
@@ -188,8 +272,11 @@ ERC20.Transfer.handler(async ({ event, context }) => {
       dailyTransferCount: daily.dailyTransferCount + 1,
       dailyMintVolume: daily.dailyMintVolume + mintVal,
       dailyBurnVolume: daily.dailyBurnVolume + burnVal,
+      netMintBurnFlow: daily.netMintBurnFlow + netFlow,
       dailyMintCount: daily.dailyMintCount + (isMint ? 1 : 0),
       dailyBurnCount: daily.dailyBurnCount + (isBurn ? 1 : 0),
+      uniqueActiveAddresses: daily.uniqueActiveAddresses + dailyUniques,
+      newAddressCount: daily.newAddressCount + newAddresses,
       endOfDaySupply: currentTotalSupply,
       lastBlockOfDay: blockNumber,
     });
@@ -204,8 +291,11 @@ ERC20.Transfer.handler(async ({ event, context }) => {
       dailyTransferCount: 1,
       dailyMintVolume: mintVal,
       dailyBurnVolume: burnVal,
+      netMintBurnFlow: netFlow,
       dailyMintCount: isMint ? 1 : 0,
       dailyBurnCount: isBurn ? 1 : 0,
+      uniqueActiveAddresses: dailyUniques,
+      newAddressCount: newAddresses,
       endOfDaySupply: currentTotalSupply,
       firstBlockOfDay: blockNumber,
       lastBlockOfDay: blockNumber,
@@ -213,7 +303,6 @@ ERC20.Transfer.handler(async ({ event, context }) => {
   }
 
   // 7. WeeklySnapshot
-  const weekId = Math.floor(ts / WEEK);
   const weeklyId = `${chainId}-${token}-${weekId}`;
   const weekly = await context.WeeklySnapshot.get(weeklyId);
   if (weekly) {
@@ -223,8 +312,10 @@ ERC20.Transfer.handler(async ({ event, context }) => {
       weeklyTransferCount: weekly.weeklyTransferCount + 1,
       weeklyMintVolume: weekly.weeklyMintVolume + mintVal,
       weeklyBurnVolume: weekly.weeklyBurnVolume + burnVal,
+      netMintBurnFlow: weekly.netMintBurnFlow + netFlow,
       weeklyMintCount: weekly.weeklyMintCount + (isMint ? 1 : 0),
       weeklyBurnCount: weekly.weeklyBurnCount + (isBurn ? 1 : 0),
+      uniqueActiveAddresses: weekly.uniqueActiveAddresses + weeklyUniques,
       endOfWeekSupply: currentTotalSupply,
       lastBlockOfWeek: blockNumber,
     });
@@ -239,15 +330,43 @@ ERC20.Transfer.handler(async ({ event, context }) => {
       weeklyTransferCount: 1,
       weeklyMintVolume: mintVal,
       weeklyBurnVolume: burnVal,
+      netMintBurnFlow: netFlow,
       weeklyMintCount: isMint ? 1 : 0,
       weeklyBurnCount: isBurn ? 1 : 0,
+      uniqueActiveAddresses: weeklyUniques,
       endOfWeekSupply: currentTotalSupply,
       firstBlockOfWeek: blockNumber,
       lastBlockOfWeek: blockNumber,
     });
   }
 
-  // 8. AccountDailyActivity for sender (skip for mints)
+  // 8. CrossTokenDailySnapshot (aggregated across all tokens)
+  const crossDailyId = `${chainId}-${dayId}`;
+  const crossDaily = await context.CrossTokenDailySnapshot.get(crossDailyId);
+  if (crossDaily) {
+    context.CrossTokenDailySnapshot.set({
+      ...crossDaily,
+      totalVolume: crossDaily.totalVolume + value,
+      totalTransferCount: crossDaily.totalTransferCount + 1,
+      totalMintVolume: crossDaily.totalMintVolume + mintVal,
+      totalBurnVolume: crossDaily.totalBurnVolume + burnVal,
+      netMintBurnFlow: crossDaily.netMintBurnFlow + netFlow,
+    });
+  } else {
+    context.CrossTokenDailySnapshot.set({
+      id: crossDailyId,
+      chainId,
+      dayId,
+      dayStartTimestamp: dayId * DAY,
+      totalVolume: value,
+      totalTransferCount: 1,
+      totalMintVolume: mintVal,
+      totalBurnVolume: burnVal,
+      netMintBurnFlow: netFlow,
+    });
+  }
+
+  // 9. AccountDailyActivity for sender (skip for mints)
   if (!isMint) {
     const senderActivityId = `${chainId}-${token}-${from}-${dayId}`;
     const senderActivity = await context.AccountDailyActivity.get(senderActivityId);
@@ -271,7 +390,7 @@ ERC20.Transfer.handler(async ({ event, context }) => {
     }
   }
 
-  // 8b. AccountDailyActivity for receiver (skip for burns)
+  // 9b. AccountDailyActivity for receiver (skip for burns)
   if (!isBurn) {
     const receiverActivityId = `${chainId}-${token}-${to}-${dayId}`;
     const receiverActivity = await context.AccountDailyActivity.get(receiverActivityId);
@@ -312,6 +431,8 @@ ERC20.Approval.handler(async ({ event, context }) => {
     token,
     address: owner,
     balance: 0n,
+    totalVolumeIn: 0n,
+    totalVolumeOut: 0n,
     transfersIn: 0,
     transfersOut: 0,
     firstSeenBlock: blockNumber,
@@ -328,6 +449,8 @@ ERC20.Approval.handler(async ({ event, context }) => {
     token,
     address: spender,
     balance: 0n,
+    totalVolumeIn: 0n,
+    totalVolumeOut: 0n,
     transfersIn: 0,
     transfersOut: 0,
     firstSeenBlock: blockNumber,

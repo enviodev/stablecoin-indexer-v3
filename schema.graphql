@@ -24,6 +24,8 @@ type Account @index(fields: ["token", ["balance", "DESC"]]) {
   token: String! @index
   address: String! @index
   balance: BigInt!
+  totalVolumeIn: BigInt!
+  totalVolumeOut: BigInt!
   transfersIn: Int!
   transfersOut: Int!
   firstSeenBlock: Int!
@@ -52,6 +54,8 @@ type TokenSupply @index(fields: ["chainId", "token"]) {
   totalSupply: BigInt!
   totalMinted: BigInt!
   totalBurned: BigInt!
+  allTimeVolume: BigInt!
+  holderCount: Int!
   mintCount: Int!
   burnCount: Int!
   transferCount: Int!
@@ -69,8 +73,10 @@ type HourlySnapshot @index(fields: ["token", ["hourId", "DESC"]]) {
   transferCount: Int!
   mintVolume: BigInt!
   burnVolume: BigInt!
+  netMintBurnFlow: BigInt!
   mintCount: Int!
   burnCount: Int!
+  uniqueActiveAddresses: Int!
   endOfHourSupply: BigInt!
   firstBlockOfHour: Int!
   lastBlockOfHour: Int!
@@ -86,8 +92,11 @@ type DailySnapshot @index(fields: ["token", ["dayId", "DESC"]]) {
   dailyTransferCount: Int!
   dailyMintVolume: BigInt!
   dailyBurnVolume: BigInt!
+  netMintBurnFlow: BigInt!
   dailyMintCount: Int!
   dailyBurnCount: Int!
+  uniqueActiveAddresses: Int!
+  newAddressCount: Int!
   endOfDaySupply: BigInt!
   firstBlockOfDay: Int!
   lastBlockOfDay: Int!
@@ -103,11 +112,37 @@ type WeeklySnapshot @index(fields: ["token", ["weekId", "DESC"]]) {
   weeklyTransferCount: Int!
   weeklyMintVolume: BigInt!
   weeklyBurnVolume: BigInt!
+  netMintBurnFlow: BigInt!
   weeklyMintCount: Int!
   weeklyBurnCount: Int!
+  uniqueActiveAddresses: Int!
   endOfWeekSupply: BigInt!
   firstBlockOfWeek: Int!
   lastBlockOfWeek: Int!
+}
+
+type CrossTokenDailySnapshot @index(fields: ["chainId", ["dayId", "DESC"]]) {
+  id: ID!                    # ${chainId}-${dayId}
+  chainId: Int! @index
+  dayId: Int! @index
+  dayStartTimestamp: Int!
+  totalVolume: BigInt!
+  totalTransferCount: Int!
+  totalMintVolume: BigInt!
+  totalBurnVolume: BigInt!
+  netMintBurnFlow: BigInt!
+}
+
+type AccountBalanceSnapshot @index(fields: ["account", "token", ["blockTimestamp", "DESC"]]) {
+  id: ID!                    # ${chainId}-${token}-${address}-${blockNumber}-${logIndex}
+  chainId: Int!
+  token: String! @index
+  account: String! @index
+  blockNumber: Int!
+  blockTimestamp: Int! @index
+  balance: BigInt!
+  balanceChange: BigInt!
+  txHash: String!
 }
 
 type AccountDailyActivity @index(fields: ["account", "token", ["dayId", "DESC"]]) {
@@ -119,4 +154,17 @@ type AccountDailyActivity @index(fields: ["account", "token", ["dayId", "DESC"]]
   transferCount: Int!
   volumeIn: BigInt!
   volumeOut: BigInt!
+}
+
+# Marker entities for unique address deduplication per period
+type HourlyActiveAddress {
+  id: ID!                    # ${chainId}-${token}-${hourId}-${address}
+}
+
+type DailyActiveAddress {
+  id: ID!                    # ${chainId}-${token}-${dayId}-${address}
+}
+
+type WeeklyActiveAddress {
+  id: ID!                    # ${chainId}-${token}-${weekId}-${address}
 }

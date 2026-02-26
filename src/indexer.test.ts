@@ -46,7 +46,7 @@ describe.runIf(process.env.INTEGRATION)(
 );
 
 describe("Unit: Transfer handler", () => {
-  it("Regular transfer updates sender and receiver balances", async () => {
+  it("Regular transfer updates all entities correctly", async () => {
     const mockDbEmpty = MockDb.createMockDb();
 
     const userAddress1 = Addresses.mockAddresses[0]!;
@@ -58,6 +58,8 @@ describe("Unit: Transfer handler", () => {
       token: USDC_ADDRESS,
       address: userAddress1,
       balance: 5000000n,
+      totalVolumeIn: 5000000n,
+      totalVolumeOut: 0n,
       transfersIn: 1,
       transfersOut: 0,
       firstSeenBlock: 100,
@@ -80,18 +82,20 @@ describe("Unit: Transfer handler", () => {
       mockDb,
     });
 
-    // Sender balance decreased
+    // Sender balance decreased, volume tracked
     const senderAccount = result.entities.Account.get(
       `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${userAddress1}`
     );
     expect(senderAccount?.balance).toBe(2000000n);
+    expect(senderAccount?.totalVolumeOut).toBe(3000000n);
     expect(senderAccount?.transfersOut).toBe(1);
 
-    // Receiver created with correct balance
+    // Receiver created with correct balance + volume
     const receiverAccount = result.entities.Account.get(
       `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${userAddress2}`
     );
     expect(receiverAccount?.balance).toBe(3000000n);
+    expect(receiverAccount?.totalVolumeIn).toBe(3000000n);
     expect(receiverAccount?.transfersIn).toBe(1);
 
     // Transfer entity
@@ -102,42 +106,68 @@ describe("Unit: Transfer handler", () => {
     expect(transferEntity?.value).toBe(3000000n);
     expect(transferEntity?.token).toBe(USDC_ADDRESS);
 
-    // TokenSupply
+    // TokenSupply — holderCount should be 1 (sender kept balance, receiver is new non-zero holder)
     const supply = result.entities.TokenSupply.get(
       `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-supply`
     );
     expect(supply?.transferCount).toBe(1);
-    expect(supply?.token).toBe(USDC_ADDRESS);
+    expect(supply?.allTimeVolume).toBe(3000000n);
+    expect(supply?.holderCount).toBe(1); // receiver became holder (sender was already)
 
-    // HourlySnapshot
+    // HourlySnapshot — net flow, unique addresses
     const hourId = Math.floor(mockTransfer.block.timestamp / 3600);
     const hourly = result.entities.HourlySnapshot.get(
       `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${hourId}`
     );
-    expect(hourly).toBeDefined();
     expect(hourly?.transferCount).toBe(1);
     expect(hourly?.volume).toBe(3000000n);
+    expect(hourly?.netMintBurnFlow).toBe(0n);
+    expect(hourly?.uniqueActiveAddresses).toBe(2);
 
-    // DailySnapshot
+    // DailySnapshot — unique addresses + new address count
     const dayId = Math.floor(mockTransfer.block.timestamp / 86400);
     const daily = result.entities.DailySnapshot.get(
       `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${dayId}`
     );
-    expect(daily).toBeDefined();
     expect(daily?.dailyTransferCount).toBe(1);
     expect(daily?.dailyVolume).toBe(3000000n);
+    expect(daily?.netMintBurnFlow).toBe(0n);
+    expect(daily?.uniqueActiveAddresses).toBe(2);
+    expect(daily?.newAddressCount).toBe(1); // receiver is new
 
     // WeeklySnapshot
     const weekId = Math.floor(mockTransfer.block.timestamp / 604800);
     const weekly = result.entities.WeeklySnapshot.get(
       `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${weekId}`
     );
-    expect(weekly).toBeDefined();
     expect(weekly?.weeklyTransferCount).toBe(1);
-    expect(weekly?.weeklyVolume).toBe(3000000n);
+    expect(weekly?.uniqueActiveAddresses).toBe(2);
+
+    // CrossTokenDailySnapshot
+    const crossDaily = result.entities.CrossTokenDailySnapshot.get(
+      `${MOCK_CHAIN_ID}-${dayId}`
+    );
+    expect(crossDaily).toBeDefined();
+    expect(crossDaily?.totalVolume).toBe(3000000n);
+    expect(crossDaily?.totalTransferCount).toBe(1);
+    expect(crossDaily?.netMintBurnFlow).toBe(0n);
+
+    // AccountBalanceSnapshot for sender
+    const senderSnap = result.entities.AccountBalanceSnapshot.get(
+      `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${userAddress1}-${mockTransfer.block.number}-${mockTransfer.logIndex}`
+    );
+    expect(senderSnap?.balance).toBe(2000000n);
+    expect(senderSnap?.balanceChange).toBe(-3000000n);
+
+    // AccountBalanceSnapshot for receiver
+    const receiverSnap = result.entities.AccountBalanceSnapshot.get(
+      `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${userAddress2}-${mockTransfer.block.number}-${mockTransfer.logIndex}`
+    );
+    expect(receiverSnap?.balance).toBe(3000000n);
+    expect(receiverSnap?.balanceChange).toBe(3000000n);
   });
 
-  it("Mint (from zero address) increases supply and skips sender update", async () => {
+  it("Mint increases supply, tracks net flow, skips sender", async () => {
     const mockDb = MockDb.createMockDb();
     const receiver = Addresses.mockAddresses[0]!;
     const zeroAddress = "0x0000000000000000000000000000000000000000";
@@ -163,29 +193,40 @@ describe("Unit: Transfer handler", () => {
       result.entities.Account.get(`${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${zeroAddress}`)
     ).toBeUndefined();
 
-    // Receiver balance
-    expect(
-      result.entities.Account.get(`${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${receiver}`)?.balance
-    ).toBe(1000000n);
+    // Receiver balance + volume
+    const receiverAccount = result.entities.Account.get(
+      `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${receiver}`
+    );
+    expect(receiverAccount?.balance).toBe(1000000n);
+    expect(receiverAccount?.totalVolumeIn).toBe(1000000n);
 
-    // TokenSupply
+    // TokenSupply — holderCount = 1
     const supply = result.entities.TokenSupply.get(
       `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-supply`
     );
     expect(supply?.totalSupply).toBe(1000000n);
     expect(supply?.totalMinted).toBe(1000000n);
-    expect(supply?.mintCount).toBe(1);
+    expect(supply?.allTimeVolume).toBe(1000000n);
+    expect(supply?.holderCount).toBe(1);
 
-    // Hourly mint tracking
+    // Hourly — positive net flow
     const hourId = Math.floor(mockMint.block.timestamp / 3600);
     const hourly = result.entities.HourlySnapshot.get(
       `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${hourId}`
     );
     expect(hourly?.mintVolume).toBe(1000000n);
-    expect(hourly?.mintCount).toBe(1);
+    expect(hourly?.netMintBurnFlow).toBe(1000000n);
+    expect(hourly?.uniqueActiveAddresses).toBe(1); // only receiver
+
+    // Balance snapshot for receiver only (no sender snapshot for mints)
+    const receiverSnap = result.entities.AccountBalanceSnapshot.get(
+      `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${receiver}-${mockMint.block.number}-${mockMint.logIndex}`
+    );
+    expect(receiverSnap?.balance).toBe(1000000n);
+    expect(receiverSnap?.balanceChange).toBe(1000000n);
   });
 
-  it("Burn (to zero address) decreases supply and skips receiver update", async () => {
+  it("Burn decreases supply, tracks negative net flow", async () => {
     const mockDbEmpty = MockDb.createMockDb();
     const sender = Addresses.mockAddresses[0]!;
     const zeroAddress = "0x0000000000000000000000000000000000000000";
@@ -196,6 +237,8 @@ describe("Unit: Transfer handler", () => {
       token: USDC_ADDRESS,
       address: sender,
       balance: 5000000n,
+      totalVolumeIn: 5000000n,
+      totalVolumeOut: 0n,
       transfersIn: 1,
       transfersOut: 0,
       firstSeenBlock: 100,
@@ -235,15 +278,23 @@ describe("Unit: Transfer handler", () => {
       `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-supply`
     );
     expect(supply?.totalBurned).toBe(2000000n);
-    expect(supply?.burnCount).toBe(1);
+    expect(supply?.allTimeVolume).toBe(2000000n);
 
-    // Weekly burn tracking
+    // Weekly — negative net flow
     const weekId = Math.floor(mockBurn.block.timestamp / 604800);
     const weekly = result.entities.WeeklySnapshot.get(
       `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${weekId}`
     );
     expect(weekly?.weeklyBurnVolume).toBe(2000000n);
-    expect(weekly?.weeklyBurnCount).toBe(1);
+    expect(weekly?.netMintBurnFlow).toBe(-2000000n);
+    expect(weekly?.uniqueActiveAddresses).toBe(1); // only sender
+
+    // Balance snapshot for sender (no receiver snapshot for burns)
+    const senderSnap = result.entities.AccountBalanceSnapshot.get(
+      `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${sender}-${mockBurn.block.number}-${mockBurn.logIndex}`
+    );
+    expect(senderSnap?.balance).toBe(3000000n);
+    expect(senderSnap?.balanceChange).toBe(-2000000n);
   });
 });
 
