@@ -1,12 +1,62 @@
-import { ERC20 } from "generated";
+import { ERC20, BigDecimal } from "generated";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const HOUR = 3600;
 const DAY = 86400;
 const WEEK = 604800;
 
+// Threshold for balance snapshots: only snapshot when balance changes by >0.1%
+// or crosses a round-number boundary, or goes to/from zero.
+const BALANCE_CHANGE_THRESHOLD_BPS = 10n; // 0.1% = 10 basis points out of 10000
+
+// Round-number boundaries for snapshot triggers (in token base units, assuming 6 decimals)
+const ROUND_BOUNDARIES = [
+  10_000n * 1_000_000n,   // 10k tokens
+  100_000n * 1_000_000n,  // 100k tokens
+  1_000_000n * 1_000_000n, // 1M tokens
+  10_000_000n * 1_000_000n, // 10M tokens
+];
+
 function getAccountId(chainId: number, token: string, address: string): string {
   return `${chainId}-${token}-${address}`;
+}
+
+/**
+ * Determine if a balance change warrants a snapshot.
+ * Always snapshot when:
+ * - Balance goes to zero (account emptied)
+ * - Balance comes from zero (account funded)
+ * - Balance changes by >0.1% of the previous balance
+ * - Balance crosses a round-number boundary
+ */
+function shouldSnapshot(oldBalance: bigint, newBalance: bigint): boolean {
+  // Always snapshot zero transitions
+  if (oldBalance === 0n || newBalance === 0n) return true;
+
+  // Check percentage change: |change| * 10000 > oldBalance * threshold
+  const change = newBalance > oldBalance ? newBalance - oldBalance : oldBalance - newBalance;
+  if (change * 10000n > (oldBalance < 0n ? -oldBalance : oldBalance) * BALANCE_CHANGE_THRESHOLD_BPS) {
+    return true;
+  }
+
+  // Check if crossed any round-number boundary
+  for (const boundary of ROUND_BOUNDARIES) {
+    if ((oldBalance < boundary && newBalance >= boundary) ||
+        (oldBalance >= boundary && newBalance < boundary)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Compute velocity as volume / supply. Returns BigDecimal.
+ * Returns 0 if supply is zero.
+ */
+function computeVelocity(volume: bigint, supply: bigint): BigDecimal {
+  if (supply === 0n) return new BigDecimal(0);
+  return new BigDecimal(volume.toString()).dividedBy(new BigDecimal(supply.toString()));
 }
 
 /**
@@ -93,18 +143,20 @@ ERC20.Transfer.handler(async ({ event, context }) => {
       });
     }
 
-    // Balance snapshot for sender
-    context.AccountBalanceSnapshot.set({
-      id: `${chainId}-${token}-${from}-${blockNumber}-${event.logIndex}`,
-      chainId,
-      token,
-      account: from,
-      blockNumber,
-      blockTimestamp: ts,
-      balance: newBalance,
-      balanceChange: 0n - value,
-      txHash: event.transaction.hash,
-    });
+    // Threshold-based balance snapshot for sender
+    if (shouldSnapshot(oldBalance, newBalance)) {
+      context.AccountBalanceSnapshot.set({
+        id: `${chainId}-${token}-${from}-${blockNumber}-${event.logIndex}`,
+        chainId,
+        token,
+        account: from,
+        blockNumber,
+        blockTimestamp: ts,
+        balance: newBalance,
+        balanceChange: 0n - value,
+        txHash: event.transaction.hash,
+      });
+    }
   }
 
   // 3. Update receiver Account (skip for burns)
@@ -145,18 +197,20 @@ ERC20.Transfer.handler(async ({ event, context }) => {
       });
     }
 
-    // Balance snapshot for receiver
-    context.AccountBalanceSnapshot.set({
-      id: `${chainId}-${token}-${to}-${blockNumber}-${event.logIndex}`,
-      chainId,
-      token,
-      account: to,
-      blockNumber,
-      blockTimestamp: ts,
-      balance: newBalance,
-      balanceChange: value,
-      txHash: event.transaction.hash,
-    });
+    // Threshold-based balance snapshot for receiver
+    if (shouldSnapshot(oldBalance, newBalance)) {
+      context.AccountBalanceSnapshot.set({
+        id: `${chainId}-${token}-${to}-${blockNumber}-${event.logIndex}`,
+        chainId,
+        token,
+        account: to,
+        blockNumber,
+        blockTimestamp: ts,
+        balance: newBalance,
+        balanceChange: value,
+        txHash: event.transaction.hash,
+      });
+    }
   }
 
   // 4. Update TokenSupply
@@ -165,10 +219,13 @@ ERC20.Transfer.handler(async ({ event, context }) => {
   const mintVal = isMint ? value : 0n;
   const burnVal = isBurn ? value : 0n;
 
+  // Compute currentTotalSupply locally to avoid redundant re-read
+  let currentTotalSupply: bigint;
   if (supply) {
+    currentTotalSupply = supply.totalSupply + mintVal - burnVal;
     context.TokenSupply.set({
       ...supply,
-      totalSupply: supply.totalSupply + mintVal - burnVal,
+      totalSupply: currentTotalSupply,
       totalMinted: supply.totalMinted + mintVal,
       totalBurned: supply.totalBurned + burnVal,
       allTimeVolume: supply.allTimeVolume + value,
@@ -180,11 +237,12 @@ ERC20.Transfer.handler(async ({ event, context }) => {
       lastUpdatedTimestamp: ts,
     });
   } else {
+    currentTotalSupply = mintVal - burnVal;
     context.TokenSupply.set({
       id: supplyId,
       chainId,
       token,
-      totalSupply: mintVal - burnVal,
+      totalSupply: currentTotalSupply,
       totalMinted: mintVal,
       totalBurned: burnVal,
       allTimeVolume: value,
@@ -197,16 +255,13 @@ ERC20.Transfer.handler(async ({ event, context }) => {
     });
   }
 
-  const currentSupply = await context.TokenSupply.get(supplyId);
-  const currentTotalSupply = currentSupply?.totalSupply ?? 0n;
   const netFlow = mintVal - burnVal;
 
-  // --- Unique address tracking per period ---
+  // --- Unique address tracking per period (daily + weekly only) ---
   const hourId = Math.floor(ts / HOUR);
   const dayId = Math.floor(ts / DAY);
   const weekId = Math.floor(ts / WEEK);
 
-  let hourlyUniques = 0;
   let dailyUniques = 0;
   let weeklyUniques = 0;
 
@@ -216,8 +271,6 @@ ERC20.Transfer.handler(async ({ event, context }) => {
   if (!isBurn) addresses.push(to);
 
   for (const addr of addresses) {
-    if (await trackUnique(context.HourlyActiveAddress, `${chainId}-${token}-${hourId}-${addr}`))
-      hourlyUniques++;
     if (await trackUnique(context.DailyActiveAddress, `${chainId}-${token}-${dayId}-${addr}`))
       dailyUniques++;
     if (await trackUnique(context.WeeklyActiveAddress, `${chainId}-${token}-${weekId}-${addr}`))
@@ -237,7 +290,6 @@ ERC20.Transfer.handler(async ({ event, context }) => {
       netMintBurnFlow: hourly.netMintBurnFlow + netFlow,
       mintCount: hourly.mintCount + (isMint ? 1 : 0),
       burnCount: hourly.burnCount + (isBurn ? 1 : 0),
-      uniqueActiveAddresses: hourly.uniqueActiveAddresses + hourlyUniques,
       endOfHourSupply: currentTotalSupply,
       lastBlockOfHour: blockNumber,
     });
@@ -255,20 +307,20 @@ ERC20.Transfer.handler(async ({ event, context }) => {
       netMintBurnFlow: netFlow,
       mintCount: isMint ? 1 : 0,
       burnCount: isBurn ? 1 : 0,
-      uniqueActiveAddresses: hourlyUniques,
       endOfHourSupply: currentTotalSupply,
       firstBlockOfHour: blockNumber,
       lastBlockOfHour: blockNumber,
     });
   }
 
-  // 6. DailySnapshot
+  // 6. DailySnapshot (with velocity)
   const dailyId = `${chainId}-${token}-${dayId}`;
   const daily = await context.DailySnapshot.get(dailyId);
   if (daily) {
+    const updatedVolume = daily.dailyVolume + value;
     context.DailySnapshot.set({
       ...daily,
-      dailyVolume: daily.dailyVolume + value,
+      dailyVolume: updatedVolume,
       dailyTransferCount: daily.dailyTransferCount + 1,
       dailyMintVolume: daily.dailyMintVolume + mintVal,
       dailyBurnVolume: daily.dailyBurnVolume + burnVal,
@@ -278,6 +330,7 @@ ERC20.Transfer.handler(async ({ event, context }) => {
       uniqueActiveAddresses: daily.uniqueActiveAddresses + dailyUniques,
       newAddressCount: daily.newAddressCount + newAddresses,
       endOfDaySupply: currentTotalSupply,
+      velocity: computeVelocity(updatedVolume, currentTotalSupply),
       lastBlockOfDay: blockNumber,
     });
   } else {
@@ -297,18 +350,20 @@ ERC20.Transfer.handler(async ({ event, context }) => {
       uniqueActiveAddresses: dailyUniques,
       newAddressCount: newAddresses,
       endOfDaySupply: currentTotalSupply,
+      velocity: computeVelocity(value, currentTotalSupply),
       firstBlockOfDay: blockNumber,
       lastBlockOfDay: blockNumber,
     });
   }
 
-  // 7. WeeklySnapshot
+  // 7. WeeklySnapshot (with velocity)
   const weeklyId = `${chainId}-${token}-${weekId}`;
   const weekly = await context.WeeklySnapshot.get(weeklyId);
   if (weekly) {
+    const updatedVolume = weekly.weeklyVolume + value;
     context.WeeklySnapshot.set({
       ...weekly,
-      weeklyVolume: weekly.weeklyVolume + value,
+      weeklyVolume: updatedVolume,
       weeklyTransferCount: weekly.weeklyTransferCount + 1,
       weeklyMintVolume: weekly.weeklyMintVolume + mintVal,
       weeklyBurnVolume: weekly.weeklyBurnVolume + burnVal,
@@ -317,6 +372,7 @@ ERC20.Transfer.handler(async ({ event, context }) => {
       weeklyBurnCount: weekly.weeklyBurnCount + (isBurn ? 1 : 0),
       uniqueActiveAddresses: weekly.uniqueActiveAddresses + weeklyUniques,
       endOfWeekSupply: currentTotalSupply,
+      velocity: computeVelocity(updatedVolume, currentTotalSupply),
       lastBlockOfWeek: blockNumber,
     });
   } else {
@@ -335,6 +391,7 @@ ERC20.Transfer.handler(async ({ event, context }) => {
       weeklyBurnCount: isBurn ? 1 : 0,
       uniqueActiveAddresses: weeklyUniques,
       endOfWeekSupply: currentTotalSupply,
+      velocity: computeVelocity(value, currentTotalSupply),
       firstBlockOfWeek: blockNumber,
       lastBlockOfWeek: blockNumber,
     });

@@ -122,7 +122,6 @@ describe("Unit: Transfer handler", () => {
     expect(hourly?.transferCount).toBe(1);
     expect(hourly?.volume).toBe(3000000n);
     expect(hourly?.netMintBurnFlow).toBe(0n);
-    expect(hourly?.uniqueActiveAddresses).toBe(2);
 
     // DailySnapshot — unique addresses + new address count
     const dayId = Math.floor(mockTransfer.block.timestamp / 86400);
@@ -216,7 +215,6 @@ describe("Unit: Transfer handler", () => {
     );
     expect(hourly?.mintVolume).toBe(1000000n);
     expect(hourly?.netMintBurnFlow).toBe(1000000n);
-    expect(hourly?.uniqueActiveAddresses).toBe(1); // only receiver
 
     // Balance snapshot for receiver only (no sender snapshot for mints)
     const receiverSnap = result.entities.AccountBalanceSnapshot.get(
