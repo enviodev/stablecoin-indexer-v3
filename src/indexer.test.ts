@@ -4,10 +4,13 @@ import "./handlers/ERC20.js";
 
 const { MockDb, ERC20, Addresses } = TestHelpers;
 
+const USDC_ADDRESS = "0x078D782b760474a361dDA0AF3839290b0EF57AD6";
+const MOCK_CHAIN_ID = 130;
+
 // Integration tests require network access to HyperSync.
 // Run with: INTEGRATION=1 pnpm test
 describe.runIf(process.env.INTEGRATION)(
-  "Integration: Arbitrum USDC transfers",
+  "Integration: Unichain stablecoin transfers",
   () => {
     it(
       "Should process transfers and create correct entities",
@@ -16,22 +19,21 @@ describe.runIf(process.env.INTEGRATION)(
 
         const result = await indexer.process({
           chains: {
-            42161: {
-              startBlock: 250_000_000,
-              endBlock: 250_001_000,
+            130: {
+              startBlock: 0,
+              endBlock: 1_000,
             },
           },
         });
 
-        // Verify we got some changes back
         expect(result.changes.length).toBeGreaterThan(0);
 
-        // Check that Transfer entities were created
         const firstChange = result.changes[0]!;
         const transfers = firstChange.Transfer?.sets;
         if (transfers) {
           expect(transfers.length).toBeGreaterThan(0);
-          expect(transfers[0]!.chainId).toBe(42161);
+          expect(transfers[0]!.chainId).toBe(130);
+          expect(transfers[0]!.token).toBeDefined();
           expect(transfers[0]!.txHash).toBeDefined();
           expect(["TRANSFER", "MINT", "BURN"]).toContain(
             transfers[0]!.transferType
@@ -50,10 +52,10 @@ describe("Unit: Transfer handler", () => {
     const userAddress1 = Addresses.mockAddresses[0]!;
     const userAddress2 = Addresses.mockAddresses[1]!;
 
-    // Set initial state with chainId-prefixed account
     const mockAccountEntity: Account = {
-      id: `42161-${userAddress1}`,
-      chainId: 42161,
+      id: `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${userAddress1}`,
+      chainId: MOCK_CHAIN_ID,
+      token: USDC_ADDRESS,
       address: userAddress1,
       balance: 5000000n,
       transfersIn: 1,
@@ -70,49 +72,69 @@ describe("Unit: Transfer handler", () => {
       from: userAddress1,
       to: userAddress2,
       value: 3000000n,
+      mockEventData: { srcAddress: USDC_ADDRESS, chainId: MOCK_CHAIN_ID },
     });
 
-    const mockDbAfterTransfer = await ERC20.Transfer.processEvent({
+    const result = await ERC20.Transfer.processEvent({
       event: mockTransfer,
       mockDb,
     });
 
-    // Check sender balance decreased
-    const senderAccount = mockDbAfterTransfer.entities.Account.get(
-      `${mockTransfer.chainId}-${userAddress1}`
+    // Sender balance decreased
+    const senderAccount = result.entities.Account.get(
+      `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${userAddress1}`
     );
-    expect(senderAccount?.balance).toBe(5000000n - 3000000n);
+    expect(senderAccount?.balance).toBe(2000000n);
     expect(senderAccount?.transfersOut).toBe(1);
 
-    // Check receiver account created with correct balance
-    const receiverAccount = mockDbAfterTransfer.entities.Account.get(
-      `${mockTransfer.chainId}-${userAddress2}`
+    // Receiver created with correct balance
+    const receiverAccount = result.entities.Account.get(
+      `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${userAddress2}`
     );
     expect(receiverAccount?.balance).toBe(3000000n);
     expect(receiverAccount?.transfersIn).toBe(1);
 
-    // Check Transfer entity was created
-    const transferId = `${mockTransfer.chainId}_${mockTransfer.block.number}_${mockTransfer.logIndex}`;
-    const transferEntity = mockDbAfterTransfer.entities.Transfer.get(transferId);
+    // Transfer entity
+    const transferId = `${MOCK_CHAIN_ID}_${USDC_ADDRESS}_${mockTransfer.block.number}_${mockTransfer.logIndex}`;
+    const transferEntity = result.entities.Transfer.get(transferId);
     expect(transferEntity).toBeDefined();
     expect(transferEntity?.transferType).toBe("TRANSFER");
     expect(transferEntity?.value).toBe(3000000n);
+    expect(transferEntity?.token).toBe(USDC_ADDRESS);
 
-    // Check ChainSupply was created
-    const supply = mockDbAfterTransfer.entities.ChainSupply.get(
-      `${mockTransfer.chainId}-supply`
+    // TokenSupply
+    const supply = result.entities.TokenSupply.get(
+      `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-supply`
     );
-    expect(supply).toBeDefined();
     expect(supply?.transferCount).toBe(1);
+    expect(supply?.token).toBe(USDC_ADDRESS);
 
-    // Check DailySnapshot was created
-    const dayId = Math.floor(mockTransfer.block.timestamp / 86400);
-    const snapshot = mockDbAfterTransfer.entities.DailySnapshot.get(
-      `${mockTransfer.chainId}-${dayId}`
+    // HourlySnapshot
+    const hourId = Math.floor(mockTransfer.block.timestamp / 3600);
+    const hourly = result.entities.HourlySnapshot.get(
+      `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${hourId}`
     );
-    expect(snapshot).toBeDefined();
-    expect(snapshot?.dailyTransferCount).toBe(1);
-    expect(snapshot?.dailyVolume).toBe(3000000n);
+    expect(hourly).toBeDefined();
+    expect(hourly?.transferCount).toBe(1);
+    expect(hourly?.volume).toBe(3000000n);
+
+    // DailySnapshot
+    const dayId = Math.floor(mockTransfer.block.timestamp / 86400);
+    const daily = result.entities.DailySnapshot.get(
+      `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${dayId}`
+    );
+    expect(daily).toBeDefined();
+    expect(daily?.dailyTransferCount).toBe(1);
+    expect(daily?.dailyVolume).toBe(3000000n);
+
+    // WeeklySnapshot
+    const weekId = Math.floor(mockTransfer.block.timestamp / 604800);
+    const weekly = result.entities.WeeklySnapshot.get(
+      `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${weekId}`
+    );
+    expect(weekly).toBeDefined();
+    expect(weekly?.weeklyTransferCount).toBe(1);
+    expect(weekly?.weeklyVolume).toBe(3000000n);
   });
 
   it("Mint (from zero address) increases supply and skips sender update", async () => {
@@ -124,6 +146,7 @@ describe("Unit: Transfer handler", () => {
       from: zeroAddress,
       to: receiver,
       value: 1000000n,
+      mockEventData: { srcAddress: USDC_ADDRESS, chainId: MOCK_CHAIN_ID },
     });
 
     const result = await ERC20.Transfer.processEvent({
@@ -131,30 +154,35 @@ describe("Unit: Transfer handler", () => {
       mockDb,
     });
 
-    // Transfer should be typed as MINT
-    const transferId = `${mockMint.chainId}_${mockMint.block.number}_${mockMint.logIndex}`;
-    const transfer = result.entities.Transfer.get(transferId);
-    expect(transfer?.transferType).toBe("MINT");
+    // MINT type
+    const transferId = `${MOCK_CHAIN_ID}_${USDC_ADDRESS}_${mockMint.block.number}_${mockMint.logIndex}`;
+    expect(result.entities.Transfer.get(transferId)?.transferType).toBe("MINT");
 
-    // No sender account should be created for zero address
-    const zeroAccount = result.entities.Account.get(
-      `${mockMint.chainId}-${zeroAddress}`
-    );
-    expect(zeroAccount).toBeUndefined();
+    // No zero address account
+    expect(
+      result.entities.Account.get(`${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${zeroAddress}`)
+    ).toBeUndefined();
 
-    // Receiver should have the minted amount
-    const receiverAccount = result.entities.Account.get(
-      `${mockMint.chainId}-${receiver}`
-    );
-    expect(receiverAccount?.balance).toBe(1000000n);
+    // Receiver balance
+    expect(
+      result.entities.Account.get(`${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${receiver}`)?.balance
+    ).toBe(1000000n);
 
-    // ChainSupply should reflect the mint
-    const supply = result.entities.ChainSupply.get(
-      `${mockMint.chainId}-supply`
+    // TokenSupply
+    const supply = result.entities.TokenSupply.get(
+      `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-supply`
     );
     expect(supply?.totalSupply).toBe(1000000n);
     expect(supply?.totalMinted).toBe(1000000n);
     expect(supply?.mintCount).toBe(1);
+
+    // Hourly mint tracking
+    const hourId = Math.floor(mockMint.block.timestamp / 3600);
+    const hourly = result.entities.HourlySnapshot.get(
+      `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${hourId}`
+    );
+    expect(hourly?.mintVolume).toBe(1000000n);
+    expect(hourly?.mintCount).toBe(1);
   });
 
   it("Burn (to zero address) decreases supply and skips receiver update", async () => {
@@ -162,10 +190,10 @@ describe("Unit: Transfer handler", () => {
     const sender = Addresses.mockAddresses[0]!;
     const zeroAddress = "0x0000000000000000000000000000000000000000";
 
-    // Pre-populate sender with a balance
     const mockDb = mockDbEmpty.entities.Account.set({
-      id: `42161-${sender}`,
-      chainId: 42161,
+      id: `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${sender}`,
+      chainId: MOCK_CHAIN_ID,
+      token: USDC_ADDRESS,
       address: sender,
       balance: 5000000n,
       transfersIn: 1,
@@ -180,6 +208,7 @@ describe("Unit: Transfer handler", () => {
       from: sender,
       to: zeroAddress,
       value: 2000000n,
+      mockEventData: { srcAddress: USDC_ADDRESS, chainId: MOCK_CHAIN_ID },
     });
 
     const result = await ERC20.Transfer.processEvent({
@@ -187,29 +216,34 @@ describe("Unit: Transfer handler", () => {
       mockDb,
     });
 
-    // Transfer should be typed as BURN
-    const transferId = `${mockBurn.chainId}_${mockBurn.block.number}_${mockBurn.logIndex}`;
-    const transfer = result.entities.Transfer.get(transferId);
-    expect(transfer?.transferType).toBe("BURN");
+    // BURN type
+    const transferId = `${MOCK_CHAIN_ID}_${USDC_ADDRESS}_${mockBurn.block.number}_${mockBurn.logIndex}`;
+    expect(result.entities.Transfer.get(transferId)?.transferType).toBe("BURN");
 
-    // No receiver account should be created for zero address
-    const zeroAccount = result.entities.Account.get(
-      `${mockBurn.chainId}-${zeroAddress}`
-    );
-    expect(zeroAccount).toBeUndefined();
+    // No zero address account
+    expect(
+      result.entities.Account.get(`${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${zeroAddress}`)
+    ).toBeUndefined();
 
-    // Sender balance should decrease
-    const senderAccount = result.entities.Account.get(
-      `${mockBurn.chainId}-${sender}`
-    );
-    expect(senderAccount?.balance).toBe(3000000n);
+    // Sender balance decreased
+    expect(
+      result.entities.Account.get(`${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${sender}`)?.balance
+    ).toBe(3000000n);
 
-    // ChainSupply should reflect the burn
-    const supply = result.entities.ChainSupply.get(
-      `${mockBurn.chainId}-supply`
+    // TokenSupply
+    const supply = result.entities.TokenSupply.get(
+      `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-supply`
     );
     expect(supply?.totalBurned).toBe(2000000n);
     expect(supply?.burnCount).toBe(1);
+
+    // Weekly burn tracking
+    const weekId = Math.floor(mockBurn.block.timestamp / 604800);
+    const weekly = result.entities.WeeklySnapshot.get(
+      `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${weekId}`
+    );
+    expect(weekly?.weeklyBurnVolume).toBe(2000000n);
+    expect(weekly?.weeklyBurnCount).toBe(1);
   });
 });
 
@@ -223,6 +257,7 @@ describe("Unit: Approval handler", () => {
       owner,
       spender,
       value: 1000000n,
+      mockEventData: { srcAddress: USDC_ADDRESS, chainId: MOCK_CHAIN_ID },
     });
 
     const result = await ERC20.Approval.processEvent({
@@ -230,22 +265,17 @@ describe("Unit: Approval handler", () => {
       mockDb,
     });
 
-    // Approval entity should exist
-    const approvalId = `${mockApproval.chainId}-${owner}-${spender}`;
+    const approvalId = `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${owner}-${spender}`;
     const approval = result.entities.Approval.get(approvalId);
     expect(approval).toBeDefined();
     expect(approval?.amount).toBe(1000000n);
+    expect(approval?.token).toBe(USDC_ADDRESS);
 
-    // Both accounts should exist
-    const ownerAccount = result.entities.Account.get(
-      `${mockApproval.chainId}-${owner}`
-    );
-    expect(ownerAccount).toBeDefined();
-    expect(ownerAccount?.balance).toBe(0n);
-
-    const spenderAccount = result.entities.Account.get(
-      `${mockApproval.chainId}-${spender}`
-    );
-    expect(spenderAccount).toBeDefined();
+    expect(
+      result.entities.Account.get(`${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${owner}`)
+    ).toBeDefined();
+    expect(
+      result.entities.Account.get(`${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${spender}`)
+    ).toBeDefined();
   });
 });

@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=./node_modules/envio/evm.schema.json
-name: usdc-stablecoin-indexer
-description: Comprehensive USDC stablecoin indexer
+name: stablecoin-indexer
+description: Multi-token stablecoin indexer (USDC, USDT)
 
 field_selection:
   transaction_fields:
@@ -17,7 +17,9 @@ chains:
     start_block: 0
     contracts:
       - name: ERC20
-        address: 0x078D782b760474a361dDA0AF3839290b0EF57AD6
+        address:
+          - 0x078D782b760474a361dDA0AF3839290b0EF57AD6
+          - 0x9151434b16b9763660705744891fA906F660EcC5
   # - id: 42161 # Arbitrum.
   #   start_block: 0
   #   contracts:
