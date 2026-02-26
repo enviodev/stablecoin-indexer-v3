@@ -28,17 +28,18 @@ describe.runIf(process.env.INTEGRATION)(
 
         expect(result.changes.length).toBeGreaterThan(0);
 
-        const firstChange = result.changes[0]!;
-        const transfers = firstChange.Transfer?.sets;
-        if (transfers) {
-          expect(transfers.length).toBeGreaterThan(0);
-          expect(transfers[0]!.chainId).toBe(130);
-          expect(transfers[0]!.token).toBeDefined();
-          expect(transfers[0]!.txHash).toBeDefined();
-          expect(["TRANSFER", "MINT", "BURN"]).toContain(
-            transfers[0]!.transferType
-          );
-        }
+        // --- COMMENTED OUT: Transfer entity removed ---
+        // const firstChange = result.changes[0]!;
+        // const transfers = firstChange.Transfer?.sets;
+        // if (transfers) {
+        //   expect(transfers.length).toBeGreaterThan(0);
+        //   expect(transfers[0]!.chainId).toBe(130);
+        //   expect(transfers[0]!.token).toBeDefined();
+        //   expect(transfers[0]!.txHash).toBeDefined();
+        //   expect(["TRANSFER", "MINT", "BURN"]).toContain(
+        //     transfers[0]!.transferType
+        //   );
+        // }
       },
       60_000
     );
@@ -62,9 +63,9 @@ describe("Unit: Transfer handler", () => {
       totalVolumeOut: 0n,
       transfersIn: 1,
       transfersOut: 0,
-      firstSeenBlock: 100,
+      // firstSeenBlock: 100,    // COMMENTED OUT: field removed from schema
       firstSeenTimestamp: 1000000,
-      lastActiveBlock: 100,
+      // lastActiveBlock: 100,   // COMMENTED OUT: field removed from schema
       lastActiveTimestamp: 1000000,
     };
 
@@ -98,13 +99,13 @@ describe("Unit: Transfer handler", () => {
     expect(receiverAccount?.totalVolumeIn).toBe(3000000n);
     expect(receiverAccount?.transfersIn).toBe(1);
 
-    // Transfer entity
-    const transferId = `${MOCK_CHAIN_ID}_${USDC_ADDRESS}_${mockTransfer.block.number}_${mockTransfer.logIndex}`;
-    const transferEntity = result.entities.Transfer.get(transferId);
-    expect(transferEntity).toBeDefined();
-    expect(transferEntity?.transferType).toBe("TRANSFER");
-    expect(transferEntity?.value).toBe(3000000n);
-    expect(transferEntity?.token).toBe(USDC_ADDRESS);
+    // --- COMMENTED OUT: Transfer entity removed ---
+    // const transferId = `${MOCK_CHAIN_ID}_${USDC_ADDRESS}_${mockTransfer.block.number}_${mockTransfer.logIndex}`;
+    // const transferEntity = result.entities.Transfer.get(transferId);
+    // expect(transferEntity).toBeDefined();
+    // expect(transferEntity?.transferType).toBe("TRANSFER");
+    // expect(transferEntity?.value).toBe(3000000n);
+    // expect(transferEntity?.token).toBe(USDC_ADDRESS);
 
     // TokenSupply — holderCount should be 1 (sender kept balance, receiver is new non-zero holder)
     const supply = result.entities.TokenSupply.get(
@@ -112,44 +113,44 @@ describe("Unit: Transfer handler", () => {
     );
     expect(supply?.transferCount).toBe(1);
     expect(supply?.allTimeVolume).toBe(3000000n);
-    expect(supply?.holderCount).toBe(1); // receiver became holder (sender was already)
+    expect(supply?.holderCount).toBe(1);
 
-    // HourlySnapshot — net flow, unique addresses
-    const hourId = Math.floor(mockTransfer.block.timestamp / 3600);
-    const hourly = result.entities.HourlySnapshot.get(
-      `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${hourId}`
-    );
-    expect(hourly?.transferCount).toBe(1);
-    expect(hourly?.volume).toBe(3000000n);
-    expect(hourly?.netMintBurnFlow).toBe(0n);
+    // --- COMMENTED OUT: HourlySnapshot removed ---
+    // const hourId = Math.floor(mockTransfer.block.timestamp / 3600);
+    // const hourly = result.entities.HourlySnapshot.get(
+    //   `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${hourId}`
+    // );
+    // expect(hourly?.transferCount).toBe(1);
+    // expect(hourly?.volume).toBe(3000000n);
+    // expect(hourly?.netMintBurnFlow).toBe(0n);
 
-    // DailySnapshot — unique addresses + new address count
+    // DailySnapshot — unique addresses
     const dayId = Math.floor(mockTransfer.block.timestamp / 86400);
     const daily = result.entities.DailySnapshot.get(
       `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${dayId}`
     );
     expect(daily?.dailyTransferCount).toBe(1);
     expect(daily?.dailyVolume).toBe(3000000n);
-    expect(daily?.netMintBurnFlow).toBe(0n);
     expect(daily?.uniqueActiveAddresses).toBe(2);
-    expect(daily?.newAddressCount).toBe(1); // receiver is new
+    // expect(daily?.netMintBurnFlow).toBe(0n);         // COMMENTED OUT: field removed
+    // expect(daily?.newAddressCount).toBe(1);           // COMMENTED OUT: field removed
 
-    // WeeklySnapshot
-    const weekId = Math.floor(mockTransfer.block.timestamp / 604800);
-    const weekly = result.entities.WeeklySnapshot.get(
-      `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${weekId}`
-    );
-    expect(weekly?.weeklyTransferCount).toBe(1);
-    expect(weekly?.uniqueActiveAddresses).toBe(2);
+    // --- COMMENTED OUT: WeeklySnapshot removed ---
+    // const weekId = Math.floor(mockTransfer.block.timestamp / 604800);
+    // const weekly = result.entities.WeeklySnapshot.get(
+    //   `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${weekId}`
+    // );
+    // expect(weekly?.weeklyTransferCount).toBe(1);
+    // expect(weekly?.uniqueActiveAddresses).toBe(2);
 
-    // CrossTokenDailySnapshot
-    const crossDaily = result.entities.CrossTokenDailySnapshot.get(
-      `${MOCK_CHAIN_ID}-${dayId}`
-    );
-    expect(crossDaily).toBeDefined();
-    expect(crossDaily?.totalVolume).toBe(3000000n);
-    expect(crossDaily?.totalTransferCount).toBe(1);
-    expect(crossDaily?.netMintBurnFlow).toBe(0n);
+    // --- COMMENTED OUT: CrossTokenDailySnapshot removed ---
+    // const crossDaily = result.entities.CrossTokenDailySnapshot.get(
+    //   `${MOCK_CHAIN_ID}-${dayId}`
+    // );
+    // expect(crossDaily).toBeDefined();
+    // expect(crossDaily?.totalVolume).toBe(3000000n);
+    // expect(crossDaily?.totalTransferCount).toBe(1);
+    // expect(crossDaily?.netMintBurnFlow).toBe(0n);
 
     // AccountBalanceSnapshot for sender
     const senderSnap = result.entities.AccountBalanceSnapshot.get(
@@ -183,9 +184,9 @@ describe("Unit: Transfer handler", () => {
       mockDb,
     });
 
-    // MINT type
-    const transferId = `${MOCK_CHAIN_ID}_${USDC_ADDRESS}_${mockMint.block.number}_${mockMint.logIndex}`;
-    expect(result.entities.Transfer.get(transferId)?.transferType).toBe("MINT");
+    // --- COMMENTED OUT: Transfer entity removed ---
+    // const transferId = `${MOCK_CHAIN_ID}_${USDC_ADDRESS}_${mockMint.block.number}_${mockMint.logIndex}`;
+    // expect(result.entities.Transfer.get(transferId)?.transferType).toBe("MINT");
 
     // No zero address account
     expect(
@@ -208,13 +209,13 @@ describe("Unit: Transfer handler", () => {
     expect(supply?.allTimeVolume).toBe(1000000n);
     expect(supply?.holderCount).toBe(1);
 
-    // Hourly — positive net flow
-    const hourId = Math.floor(mockMint.block.timestamp / 3600);
-    const hourly = result.entities.HourlySnapshot.get(
-      `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${hourId}`
-    );
-    expect(hourly?.mintVolume).toBe(1000000n);
-    expect(hourly?.netMintBurnFlow).toBe(1000000n);
+    // --- COMMENTED OUT: HourlySnapshot removed ---
+    // const hourId = Math.floor(mockMint.block.timestamp / 3600);
+    // const hourly = result.entities.HourlySnapshot.get(
+    //   `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${hourId}`
+    // );
+    // expect(hourly?.mintVolume).toBe(1000000n);
+    // expect(hourly?.netMintBurnFlow).toBe(1000000n);
 
     // Balance snapshot for receiver only (no sender snapshot for mints)
     const receiverSnap = result.entities.AccountBalanceSnapshot.get(
@@ -239,9 +240,9 @@ describe("Unit: Transfer handler", () => {
       totalVolumeOut: 0n,
       transfersIn: 1,
       transfersOut: 0,
-      firstSeenBlock: 100,
+      // firstSeenBlock: 100,    // COMMENTED OUT: field removed from schema
       firstSeenTimestamp: 1000000,
-      lastActiveBlock: 100,
+      // lastActiveBlock: 100,   // COMMENTED OUT: field removed from schema
       lastActiveTimestamp: 1000000,
     });
 
@@ -257,9 +258,9 @@ describe("Unit: Transfer handler", () => {
       mockDb,
     });
 
-    // BURN type
-    const transferId = `${MOCK_CHAIN_ID}_${USDC_ADDRESS}_${mockBurn.block.number}_${mockBurn.logIndex}`;
-    expect(result.entities.Transfer.get(transferId)?.transferType).toBe("BURN");
+    // --- COMMENTED OUT: Transfer entity removed ---
+    // const transferId = `${MOCK_CHAIN_ID}_${USDC_ADDRESS}_${mockBurn.block.number}_${mockBurn.logIndex}`;
+    // expect(result.entities.Transfer.get(transferId)?.transferType).toBe("BURN");
 
     // No zero address account
     expect(
@@ -278,14 +279,14 @@ describe("Unit: Transfer handler", () => {
     expect(supply?.totalBurned).toBe(2000000n);
     expect(supply?.allTimeVolume).toBe(2000000n);
 
-    // Weekly — negative net flow
-    const weekId = Math.floor(mockBurn.block.timestamp / 604800);
-    const weekly = result.entities.WeeklySnapshot.get(
-      `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${weekId}`
-    );
-    expect(weekly?.weeklyBurnVolume).toBe(2000000n);
-    expect(weekly?.netMintBurnFlow).toBe(-2000000n);
-    expect(weekly?.uniqueActiveAddresses).toBe(1); // only sender
+    // --- COMMENTED OUT: WeeklySnapshot removed ---
+    // const weekId = Math.floor(mockBurn.block.timestamp / 604800);
+    // const weekly = result.entities.WeeklySnapshot.get(
+    //   `${MOCK_CHAIN_ID}-${USDC_ADDRESS}-${weekId}`
+    // );
+    // expect(weekly?.weeklyBurnVolume).toBe(2000000n);
+    // expect(weekly?.netMintBurnFlow).toBe(-2000000n);
+    // expect(weekly?.uniqueActiveAddresses).toBe(1);
 
     // Balance snapshot for sender (no receiver snapshot for burns)
     const senderSnap = result.entities.AccountBalanceSnapshot.get(
@@ -295,4 +296,3 @@ describe("Unit: Transfer handler", () => {
     expect(senderSnap?.balanceChange).toBe(-2000000n);
   });
 });
-
