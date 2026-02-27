@@ -24,7 +24,7 @@ chains:
     contracts:
       - name: ERC20
         address:
-          - 0x078D782b760474a361dDA0AF3839290b0EF57AD6
+          - 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
   # - id: 42161 # Arbitrum.
   #   start_block: 0
   #   contracts:
